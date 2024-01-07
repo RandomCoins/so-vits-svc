@@ -79,7 +79,7 @@ def updata_mix_info(files):
             traceback.print_exc()
         raise gr.Error(e)
 
-def modelAnalysis(model_path,config_path,cluster_model_path,device,enhance,diff_model_path,diff_config_path,only_diffusion,use_spk_mix,local_model_enabled,local_model_selection):
+def modelAnalysis(model_path,config_path,cluster_model_path,device,enhance,diff_model_path,diff_config_path,only_diffusion,use_spk_mix,local_model_enabled,local_model_selection,local_diff_model_enabled,local_diff_model_selection):
     global model
     try:
         device = cuda[device] if "CUDA" in device else device
@@ -93,14 +93,20 @@ def modelAnalysis(model_path,config_path,cluster_model_path,device,enhance,diff_
             # upload from webpage
             model_path = model_path.name
             config_path = config_path.name
+        if (local_diff_model_enabled):
+            diff_model_path = glob.glob(os.path.join(local_diff_model_selection, '*.pt'))[0]
+            diff_config_path = glob.glob(os.path.join(local_diff_model_selection, '*.yaml'))[0]
+        elif diff_model_path is not None:
+            diff_model_path = diff_model_path.name
+            diff_config_path = diff_model_path.name
         fr = ".pkl" in cluster_filepath[1]
         model = Svc(model_path,
                 config_path,
                 device=device if device != "Auto" else None,
                 cluster_model_path = cluster_model_path.name if cluster_model_path is not None else "",
                 nsf_hifigan_enhance=enhance,
-                diffusion_model_path = diff_model_path.name if diff_model_path is not None else "",
-                diffusion_config_path = diff_config_path.name if diff_config_path is not None else "",
+                diffusion_model_path = diff_model_path if diff_model_path is not None else "",
+                diffusion_config_path = diff_config_path if diff_config_path is not None else "",
                 shallow_diffusion = True if diff_model_path is not None else False,
                 only_diffusion = only_diffusion,
                 spk_mix_enable = use_spk_mix,
@@ -118,7 +124,7 @@ def modelAnalysis(model_path,config_path,cluster_model_path,device,enhance,diff_
         if diff_model_path is None:
             msg += "未加载扩散模型\n"
         else:
-            msg += f"扩散模型{diff_model_path.name}加载成功\n"
+            msg += f"扩散模型{diff_model_path}加载成功\n"
         msg += "当前模型的可用音色：\n"
         for i in spks:
             msg += i + " "
@@ -268,6 +274,18 @@ def local_model_refresh_fn():
     choices = scan_local_models()
     return gr.Dropdown.update(choices=choices)
 
+def local_diff_model_refresh_fn():
+    res = []
+    candidates = glob.glob(os.path.join(local_model_root, '**', '*.yaml'), recursive=True)
+    candidates = set([os.path.dirname(c) for c in candidates])
+    for candidate in candidates:
+        jsons = glob.glob(os.path.join(candidate, '*.yaml'))
+        pths = glob.glob(os.path.join(candidate, '*.pt'))
+        if (len(jsons) == 1 and len(pths) == 1):
+            # must contain exactly one json and one pth file
+            res.append(candidate)
+    return gr.Dropdown.update(choices=res)
+
 def debug_change():
     global debug
     debug = debug_button.value
@@ -300,9 +318,16 @@ with gr.Blocks(
                             gr.Markdown(f'模型应当放置于{local_model_root}文件夹下')
                             local_model_refresh_btn = gr.Button('刷新本地模型列表')
                             local_model_selection = gr.Dropdown(label='选择模型文件夹', choices=[], interactive=True)
-                    with gr.Row():
-                        diff_model_path = gr.File(label="选择扩散模型文件")
-                        diff_config_path = gr.File(label="选择扩散模型配置文件")
+                    with gr.Tabs():
+                        local_diff_model_enabled = gr.Checkbox(value=False, visible=False)
+                        with gr.TabItem('上传') as local_diff_model_tab_upload:
+                            with gr.Row():
+                                diff_model_path = gr.File(label="选择扩散模型文件")
+                                diff_config_path = gr.File(label="选择扩散模型配置文件")
+                        with gr.TabItem('本地') as local_diff_model_tab_local:
+                            gr.Markdown(f'模型应当放置于{local_model_root}文件夹下')
+                            local_diff_model_refresh_btn = gr.Button('刷新本地模型列表')
+                            local_diff_model_selection = gr.Dropdown(label='选择模型文件夹', choices=[], interactive=True)
                     cluster_model_path = gr.File(label="选择聚类模型或特征检索文件（没有可以不选）")
                     device = gr.Dropdown(label="推理设备，默认为自动选择CPU和GPU", choices=["Auto",*cuda.keys(),"cpu"], value="Auto")
                     enhance = gr.Checkbox(label="是否使用NSF_HIFIGAN增强,该选项对部分训练集少的模型有一定的音质增强效果，但是对训练好的模型有反面效果，默认关闭", value=False)
@@ -416,12 +441,16 @@ with gr.Blocks(
         # set local enabled/disabled on tab switch
         local_model_tab_upload.select(lambda: False, outputs=local_model_enabled)
         local_model_tab_local.select(lambda: True, outputs=local_model_enabled)
+
+        local_diff_model_refresh_btn.click(local_diff_model_refresh_fn, outputs=local_diff_model_selection)
+        local_diff_model_tab_upload.select(lambda: False, outputs=local_diff_model_enabled)
+        local_diff_model_tab_local.select(lambda: True, outputs=local_diff_model_enabled)
         
         vc_submit.click(vc_fn, [sid, vc_input3, output_format, vc_transform,auto_f0,cluster_ratio, slice_db, noise_scale,pad_seconds,cl_num,lg_num,lgr_num,f0_predictor,enhancer_adaptive_key,cr_threshold,k_step,use_spk_mix,second_encoding,loudness_envelope_adjustment], [vc_output1, vc_output2])
         vc_submit2.click(vc_fn2, [text2tts, tts_lang, tts_gender, tts_rate, tts_volume, sid, output_format, vc_transform,auto_f0,cluster_ratio, slice_db, noise_scale,pad_seconds,cl_num,lg_num,lgr_num,f0_predictor,enhancer_adaptive_key,cr_threshold,k_step,use_spk_mix,second_encoding,loudness_envelope_adjustment], [vc_output1, vc_output2])
 
         debug_button.change(debug_change,[],[])
-        model_load_button.click(modelAnalysis,[model_path,config_path,cluster_model_path,device,enhance,diff_model_path,diff_config_path,only_diffusion,use_spk_mix,local_model_enabled,local_model_selection],[sid,sid_output])
+        model_load_button.click(modelAnalysis,[model_path,config_path,cluster_model_path,device,enhance,diff_model_path,diff_config_path,only_diffusion,use_spk_mix,local_model_enabled,local_model_selection,local_diff_model_enabled,local_diff_model_selection],[sid,sid_output])
         model_unload_button.click(modelUnload,[],[sid,sid_output])
     os.system("start http://127.0.0.1:7860")
     app.launch()
